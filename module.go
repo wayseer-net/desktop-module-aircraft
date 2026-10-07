@@ -144,24 +144,25 @@ func (m *Module) Health() sdk.Health {
 	return sdk.Health{}
 }
 
-// Discover reads the source now and returns what it holds, apart from Run's working set.
+// Discover returns what Run last read, so the source is not asked more often than interval;
+// before Run has read, it reads the source now.
 func (m *Module) Discover(ctx context.Context) (*sdk.ChangeSet, error) {
 	m.mu.Lock()
-	src, f := m.src, m.newFleet()
+	w, src, f := m.world, m.src, m.newFleet()
 	m.mu.Unlock()
-	rs, err := src.read(ctx)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	f.update(rs, now)
-	m.mu.Lock()
-	s := m.scene(f)
-	m.mu.Unlock()
-	w, err := buildWorld(s)
-	if err != nil {
-		return nil, err
+	if w.ents == nil {
+		rs, err := src.read(ctx)
+		if err != nil {
+			return nil, err
+		}
+		f.update(rs, time.Now())
+		m.mu.Lock()
+		s := m.scene(f)
+		m.mu.Unlock()
+		if w, err = buildWorld(s); err != nil {
+			return nil, err
+		}
 	}
 	var fresh sdk.Tracker
-	return fresh.Changes(w.ents, w.edges, now), nil
+	return fresh.Changes(w.ents, w.edges, time.Now()), nil
 }

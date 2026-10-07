@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,5 +210,21 @@ func TestARateLimitIsWaitedOut(t *testing.T) {
 		if got := retryAfter(c.err, every); got != c.want {
 			t.Errorf("%v: waits %v, want %v", c.err, got, c.want)
 		}
+	}
+}
+
+func TestDiscoverAnswersFromRunsLastReadSoTheSourceIsNotAskedMoreOften(t *testing.T) {
+	var reads atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reads.Add(1)
+		_, _ = w.Write([]byte(`{"ac": [{"hex": "4ca9f1", "lat": 51.5, "lon": -0.4, "seen": 0}]}`))
+	}))
+	defer srv.Close()
+	m := configured(t, "url: "+srv.URL+"\n"+london+"\ninterval: 1m")
+	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
+	sink.WaitFor(t, 1)
+	cs, err := m.Discover(context.Background())
+	if err != nil || reads.Load() != 1 || !slices.ContainsFunc(cs.Upserts, func(e sdk.Entity) bool { return e.Ref == aircraftRef(t, "4ca9f1") }) {
+		t.Errorf("%d reads, %v: %s", reads.Load(), err, render(cs))
 	}
 }
