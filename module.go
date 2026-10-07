@@ -49,12 +49,9 @@ func (m *Module) Info() sdk.Info {
 
 // Configure checks the options and reads the token; nothing is fetched until Run or Discover.
 func (m *Module) Configure(_ context.Context, cfg sdk.Config) error {
-	o := defaults()
-	if err := cfg.Decode(&o); err != nil {
+	o, err := readOptions(cfg)
+	if err != nil {
 		return err
-	}
-	if err := o.validate(); err != nil {
-		return fmt.Errorf("line %d: %w", cfg.Line, err)
 	}
 	token, err := o.Read()
 	if err != nil {

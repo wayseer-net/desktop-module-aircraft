@@ -40,7 +40,7 @@ func TestMakeSignPackagesTheModule(t *testing.T) {
 	}
 }
 
-// coreCheckout is Wayseer's own source two folders up, as in its workspace, which only Wayseer has; without
+// coreCheckout is Wayseer's own source two folders up, as in its workspace; without
 // it the test skips.
 func coreCheckout(t *testing.T) string {
 	t.Helper()

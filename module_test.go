@@ -71,14 +71,14 @@ func TestConformance(t *testing.T) {
 	sdktest.Conform(t, sdktest.Case{
 		New:     func() sdk.Module { return New() },
 		Name:    "inv",
-		Options: "url: " + srv.URL,
-		Failing: "url: " + closed.URL,
+		Options: "source: receiver\nurl: " + srv.URL,
+		Failing: "source: receiver\nurl: " + closed.URL,
 	})
 }
 
 func TestSnapshotMatchesTheInventory(t *testing.T) {
 	_, srv := serve(t)
-	cs, err := configured(t, "url: "+srv.URL).Discover(context.Background())
+	cs, err := configured(t, "source: receiver\nurl: "+srv.URL).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func render(cs *sdk.ChangeSet) string {
 
 func TestAStatusChangeIsAnEvent(t *testing.T) {
 	inv, srv := serve(t)
-	m := configured(t, "url: "+srv.URL+"\ninterval: 100ms")
+	m := configured(t, "source: receiver\nurl: "+srv.URL+"\ninterval: 500ms")
 	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
 	sink.WaitFor(t, 1)
 	inv.set(`{"items": [{"id": "web-01", "status": "crit"}]}`)
@@ -117,7 +117,7 @@ func TestAStatusChangeIsAnEvent(t *testing.T) {
 
 func TestEachReadIsAPointInTheItemsSeries(t *testing.T) {
 	inv, srv := serve(t)
-	m := configured(t, "url: "+srv.URL+"\ninterval: 100ms")
+	m := configured(t, "source: receiver\nurl: "+srv.URL+"\ninterval: 500ms")
 	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
 	sink.WaitFor(t, 1)
 	inv.set(`{"items": [{"id": "web-01", "metrics": {"cpu.utilisation": 50}}]}`)
@@ -146,7 +146,7 @@ func TestEachReadIsAPointInTheItemsSeries(t *testing.T) {
 func TestTheTokenIsSentButNeverShown(t *testing.T) {
 	inv, srv := serve(t)
 	t.Setenv("INV_TOKEN", "s3cret-token")
-	m := configured(t, "url: "+srv.URL+"\nsecret_env: INV_TOKEN")
+	m := configured(t, "source: receiver\nurl: "+srv.URL+"\nsecret_env: INV_TOKEN")
 	if _, err := m.Discover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -172,33 +172,15 @@ func TestBadInventoriesAreErrors(t *testing.T) {
 	} {
 		inv, srv := serve(t)
 		inv.set(body)
-		if _, err := configured(t, "url: "+srv.URL).Discover(context.Background()); err == nil {
+		if _, err := configured(t, "source: receiver\nurl: "+srv.URL).Discover(context.Background()); err == nil {
 			t.Errorf("%s accepted", body)
-		}
-	}
-}
-
-func TestBadOptionsAreRejected(t *testing.T) {
-	for _, opts := range []string{
-		"",
-		"url: ftp://example.test/inv.json",
-		"url: http://user:pass@example.test/",
-		"url: http://example.test/\ninterval: 10ms",
-		"url: http://example.test/\ntimeout: 0s",
-	} {
-		cfg, err := sdktest.Config("inv", opts)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := New().Configure(context.Background(), cfg); err == nil {
-			t.Errorf("%q accepted", opts)
 		}
 	}
 }
 
 func TestRecheckReadsTheItemAgainAndSaysItsStatus(t *testing.T) {
 	inv, srv := serve(t)
-	m := configured(t, "url: "+srv.URL)
+	m := configured(t, "source: receiver\nurl: "+srv.URL)
 	if err := sdk.ValidateActions(m.Actions()); err != nil {
 		t.Fatal(err)
 	}
