@@ -109,7 +109,7 @@ func retryAfter(err error, every time.Duration) time.Duration {
 func (m *Module) newFleet() *fleet { return newFleet(m.opts.area(), m.opts.Expire, m.opts.MaxAircraft) }
 
 // refresh reads the source into the working set, records its metrics, and returns what
-// changed since the last send.
+// changed since the last send, with what happened.
 func (m *Module) refresh(ctx context.Context) (*sdk.ChangeSet, error) {
 	rs, err := m.src.read(ctx)
 	if err != nil {
@@ -123,9 +123,12 @@ func (m *Module) refresh(ctx context.Context) (*sdk.ChangeSet, error) {
 	if err != nil {
 		return nil, err
 	}
+	evs := events(m.world.ents, w.ents, now)
 	m.world = w
 	m.record(&w, now)
-	return m.tracker.Changes(w.ents, w.edges, now), nil
+	cs := m.tracker.Changes(w.ents, w.edges, now)
+	cs.Events = evs
+	return cs, nil
 }
 
 // scene is what to build a world from the fleet. Callers hold m.mu.
