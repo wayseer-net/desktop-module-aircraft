@@ -16,44 +16,47 @@ import (
 	"wayseer.dev/sdk/sdktest"
 )
 
-// inventory serves a JSON body the test can change.
-type inventory struct {
+// feed serves a JSON body the test can change.
+type feed struct {
 	mu   sync.Mutex
 	body string
-	auth string // the last Authorization header
 }
 
-func (inv *inventory) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	inv.auth = r.Header.Get("Authorization")
+func (f *feed) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(inv.body))
+	_, _ = w.Write([]byte(f.body))
 }
 
-func (inv *inventory) set(body string) {
-	inv.mu.Lock()
-	defer inv.mu.Unlock()
-	inv.body = body
+func (f *feed) set(body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.body = body
 }
 
-// serve starts a server for the fixture inventory.
-func serve(t *testing.T) (*inventory, *httptest.Server) {
+// serve starts a server for a fixture feed.
+func serve(t *testing.T, fixture string) (*feed, *httptest.Server) {
 	t.Helper()
-	b, err := os.ReadFile("testdata/inventory.json")
+	b, err := os.ReadFile(fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv := &inventory{body: string(b)}
-	srv := httptest.NewServer(inv)
+	f := &feed{body: string(b)}
+	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
-	return inv, srv
+	return f, srv
+}
+
+// receiver is the options for a receiver at srv, then any more.
+func receiver(srv *httptest.Server, more ...string) string {
+	return strings.Join(append([]string{"source: receiver", "url: " + srv.URL}, more...), "\n")
 }
 
 // configured is a module configured with options.
 func configured(t *testing.T, options string) *Module {
 	t.Helper()
-	cfg, err := sdktest.Config("inv", options)
+	cfg, err := sdktest.Config("air", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,25 +67,50 @@ func configured(t *testing.T, options string) *Module {
 	return m
 }
 
-func TestConformance(t *testing.T) {
-	_, srv := serve(t)
+func closedURL() string {
 	closed := httptest.NewServer(http.NotFoundHandler())
 	closed.Close()
+	return closed.URL
+}
+
+func TestConformanceWithAReceiver(t *testing.T) {
+	_, srv := serve(t, "testdata/aircraft.json")
 	sdktest.Conform(t, sdktest.Case{
-		New:     func() sdk.Module { return New() },
-		Name:    "inv",
-		Options: "source: receiver\nurl: " + srv.URL,
-		Failing: "source: receiver\nurl: " + closed.URL,
+		New:      func() sdk.Module { return New() },
+		Name:     "air",
+		Options:  receiver(srv),
+		Failing:  "source: receiver\nurl: " + closedURL(),
+		Manifest: "manifest.yaml",
 	})
 }
 
-func TestSnapshotMatchesTheInventory(t *testing.T) {
-	_, srv := serve(t)
-	cs, err := configured(t, "source: receiver\nurl: "+srv.URL).Discover(context.Background())
+func TestConformanceWithADSBLol(t *testing.T) {
+	_, srv := serve(t, "testdata/adsblol.json")
+	sdktest.Conform(t, sdktest.Case{
+		New:      func() sdk.Module { return New() },
+		Name:     "air",
+		Options:  "url: " + srv.URL + "\n" + london,
+		Failing:  "url: " + closedURL() + "\n" + london,
+		Manifest: "manifest.yaml",
+	})
+}
+
+func TestSnapshotMatchesTheFixture(t *testing.T) {
+	_, srv := serve(t, "testdata/aircraft.json")
+	cs, err := configured(t, receiver(srv)).Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	sdktest.Golden(t, "testdata/inventory.txt", render(cs))
+	sdktest.Golden(t, "testdata/aircraft.txt", render(cs))
+}
+
+func TestADSBLolAircraftAreInTheArea(t *testing.T) {
+	_, srv := serve(t, "testdata/adsblol.json")
+	cs, err := configured(t, "url: "+srv.URL+"\n"+london).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sdktest.Golden(t, "testdata/adsblol.txt", render(cs))
 }
 
 // render lists a change set's entities and edges, one per line.
@@ -94,7 +122,11 @@ func render(cs *sdk.ChangeSet) string {
 			keys = append(keys, k+"="+v.String())
 		}
 		slices.Sort(keys)
-		fmt.Fprintf(&b, "%s %q %s\n", e.Ref, e.Name, strings.Join(append([]string{e.Status.Level.String()}, keys...), " "))
+		place := "-"
+		if e.Place.Known {
+			place = fmt.Sprintf("%.3f,%.3f", e.Place.Lat, e.Place.Lon)
+		}
+		fmt.Fprintf(&b, "%s %q %s %s %q %s\n", e.Ref, e.Name, place, e.Status.Level, e.Status.Reason, strings.Join(keys, " "))
 	}
 	for _, e := range cs.Edges {
 		fmt.Fprintf(&b, "%s %s %s\n", e.From, e.Rel, e.To)
@@ -102,31 +134,43 @@ func render(cs *sdk.ChangeSet) string {
 	return b.String()
 }
 
-func TestAStatusChangeIsAnEvent(t *testing.T) {
-	inv, srv := serve(t)
-	m := configured(t, "source: receiver\nurl: "+srv.URL+"\ninterval: 500ms")
-	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
-	sink.WaitFor(t, 1)
-	inv.set(`{"items": [{"id": "web-01", "status": "crit"}]}`)
-	sdktest.Eventually(t, func() bool { return len(sink.Events()) > 0 })
-	ev := sink.Events()[0]
-	if ev.Severity != sdk.SevError || ev.Message != "web-01 is now crit, was ok" || ev.Entity.Native() != "web-01" {
-		t.Errorf("event %+v", ev)
+func TestOperatorsCanBeLeftOut(t *testing.T) {
+	_, srv := serve(t, "testdata/aircraft.json")
+	cs, err := configured(t, receiver(srv, "operators: false")).Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cs.Edges) > 0 || slices.ContainsFunc(cs.Upserts, func(e sdk.Entity) bool { return e.Kind == KindOperator }) {
+		t.Errorf("operators sent: %s", render(cs))
 	}
 }
 
-func TestEachReadIsAPointInTheItemsSeries(t *testing.T) {
-	inv, srv := serve(t)
-	m := configured(t, "source: receiver\nurl: "+srv.URL+"\ninterval: 500ms")
+func TestAnAircraftMovesOnTheMap(t *testing.T) {
+	f, srv := serve(t, "testdata/aircraft.json")
+	m := configured(t, receiver(srv, "interval: 500ms"))
 	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
 	sink.WaitFor(t, 1)
-	inv.set(`{"items": [{"id": "web-01", "metrics": {"cpu.utilisation": 50}}]}`)
-	web := sdk.SeriesRef{Entity: "inv/host/web-01", Metric: "cpu.utilisation"}
+	f.set(`{"aircraft": [{"hex": "4ca9f1", "flight": "EIN12A", "lat": 51.6, "lon": -0.2, "seen": 0}]}`)
+	ref, want := aircraftRef(t, "4ca9f1"), sdk.At(51.6, -0.2)
+	sdktest.Eventually(t, func() bool {
+		return slices.ContainsFunc(sink.Sets(), func(cs sdk.ChangeSet) bool {
+			return slices.ContainsFunc(cs.Upserts, func(e sdk.Entity) bool { return e.Ref == ref && e.Place == want })
+		})
+	})
+}
+
+func TestEachReadIsAPointInTheAltitudeSeries(t *testing.T) {
+	f, srv := serve(t, "testdata/aircraft.json")
+	m := configured(t, receiver(srv, "interval: 500ms"))
+	sink := sdktest.Run(t, func(ctx context.Context, s *sdktest.Sink) error { return m.Run(ctx, s) })
+	sink.WaitFor(t, 1)
+	f.set(`{"aircraft": [{"hex": "4ca9f1", "alt_baro": 13000, "seen": 0}]}`)
+	ref := sdk.SeriesRef{Entity: aircraftRef(t, "4ca9f1"), Metric: metricAltitude}
 	query := func() []sdk.Series {
 		now := time.Now()
 		got, err := m.QuerySeries(context.Background(), sdk.SeriesQuery{
-			Metrics: []string{web.Metric},
-			Window:  sdk.TimeWindow{From: now.Add(-time.Minute), To: now.Add(time.Second)},
+			Entities: []sdk.EntityRef{ref.Entity}, Metrics: []string{ref.Metric},
+			Window: sdk.TimeWindow{From: now.Add(-time.Minute), To: now.Add(time.Second)},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -135,71 +179,35 @@ func TestEachReadIsAPointInTheItemsSeries(t *testing.T) {
 	}
 	sdktest.Eventually(t, func() bool {
 		got := query()
-		return len(got) == 1 && len(got[0].Points) == 2
+		return len(got) == 1 && len(got[0].Points) >= 2 && got[0].Points[len(got[0].Points)-1].V == 13000
 	})
-	got := query()[0]
-	if got.Ref != web || got.Unit != sdk.UnitPercent || got.Points[0].V != 42 || got.Points[1].V != 50 {
+	if got := query()[0]; got.Points[0].V != 12000 {
 		t.Errorf("series %+v", got)
 	}
 }
 
-func TestTheTokenIsSentButNeverShown(t *testing.T) {
-	inv, srv := serve(t)
-	t.Setenv("INV_TOKEN", "s3cret-token")
-	m := configured(t, "source: receiver\nurl: "+srv.URL+"\nsecret_env: INV_TOKEN")
-	if _, err := m.Discover(context.Background()); err != nil {
+func aircraftRef(t *testing.T, hex string) sdk.EntityRef {
+	t.Helper()
+	ref, err := sdk.NewEntityRef("air", KindAircraft, hex)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if inv.auth != "Bearer s3cret-token" {
-		t.Errorf("Authorization %q", inv.auth)
-	}
-	inv.set("not json")
-	_, err := m.Discover(context.Background())
-	if err == nil || strings.Contains(err.Error(), "s3cret") {
-		t.Errorf("error %v", err)
-	}
+	return ref
 }
 
-func TestBadInventoriesAreErrors(t *testing.T) {
-	for _, body := range []string{
-		`not json`,
-		`{"items": [{"id": ""}]}`,
-		`{"items": [{"id": "a", "status": "fine"}]}`,
-		`{"items": [{"id": "a", "kind": "Not A Kind"}]}`,
-		`{"items": [{"id": "a", "attrs": {"nested": {"x": 1}}}]}`,
-		`{"items": [{"id": "a"}, {"id": "a"}]}`,
-		`{"items": [{"id": "a", "metrics": {"no.such.metric": 1}}]}`,
+func TestARateLimitIsWaitedOut(t *testing.T) {
+	every := 10 * time.Second
+	for _, c := range []struct {
+		err  error
+		want time.Duration
+	}{
+		{fmt.Errorf("refused"), every},
+		{&limitedError{wait: 0}, 2 * every},
+		{&limitedError{wait: time.Minute}, time.Minute},
+		{&limitedError{wait: time.Hour}, limitMax},
 	} {
-		inv, srv := serve(t)
-		inv.set(body)
-		if _, err := configured(t, "source: receiver\nurl: "+srv.URL).Discover(context.Background()); err == nil {
-			t.Errorf("%s accepted", body)
-		}
-	}
-}
-
-func TestRecheckReadsTheItemAgainAndSaysItsStatus(t *testing.T) {
-	inv, srv := serve(t)
-	m := configured(t, "source: receiver\nurl: "+srv.URL)
-	if err := sdk.ValidateActions(m.Actions()); err != nil {
-		t.Fatal(err)
-	}
-	web := sdk.ActionRequest{Instance: "inv", Action: "recheck", Entity: "inv/host/web-01"}
-	inv.set(`{"items": [{"id": "web-01", "status": "warn"}]}`)
-	if res, err := m.Do(context.Background(), web); err != nil || res.Message != "web-01 is warn" {
-		t.Errorf("recheck: %+v, %v", res, err)
-	}
-	inv.set(`{"items": []}`)
-	if _, err := m.Do(context.Background(), web); err == nil || !strings.Contains(err.Error(), "no longer in the inventory") {
-		t.Errorf("a gone item: %v", err)
-	}
-	for _, bad := range []sdk.ActionRequest{
-		{Instance: "inv", Action: "reboot", Entity: web.Entity},
-		{Instance: "inv", Action: "recheck", Entity: web.Entity, Params: map[string]string{"x": "1"}},
-		{Instance: "inv", Action: "recheck", Entity: "inv/pod/web-01"},
-	} {
-		if _, err := m.Do(context.Background(), bad); err == nil {
-			t.Errorf("%+v ran", bad)
+		if got := retryAfter(c.err, every); got != c.want {
+			t.Errorf("%v: waits %v, want %v", c.err, got, c.want)
 		}
 	}
 }

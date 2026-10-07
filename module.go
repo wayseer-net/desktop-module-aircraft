@@ -2,11 +2,6 @@ package aircraft
 
 import (
 	"context"
-	"fmt"
-	"maps"
-	"net/http"
-	"slices"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -19,23 +14,27 @@ const Kind = "aircraft"
 
 const version = "1"
 
-// retryMax is the longest wait before retrying a failed read.
-const retryMax = 10 * time.Second
+// retryMax is the longest wait before retrying a failed read; limitMax is the longest wait a
+// rate limit is given.
+const (
+	retryMax = 10 * time.Second
+	limitMax = 5 * time.Minute
+)
 
 // init registers the kind for a build of the app that imports the package.
 func init() { sdk.Register(Kind, func() sdk.Module { return New() }) }
 
-// Module reads the inventory every interval and sends what changed.
+// Module reads the source every interval and sends what changed.
 type Module struct {
 	health atomic.Pointer[sdk.Health]
 
-	mu      sync.Mutex // guards what follows, shared by Run and Discover
+	mu      sync.Mutex // guards what follows, shared by Run, Discover and QuerySeries
 	name    sdk.ModuleID
 	opts    options
-	client  *http.Client
-	token   sdk.Secret
+	src     *source
 	tracker sdk.Tracker
-	world   world                       // as last read
+	fleet   *fleet
+	world   world                       // as last sent
 	series  map[sdk.SeriesRef]*sdk.Ring // recorded by Run
 }
 
@@ -44,7 +43,7 @@ func New() *Module { return &Module{} }
 
 // Info describes the module.
 func (m *Module) Info() sdk.Info {
-	return sdk.Info{Kind: Kind, Version: version, Description: "Entities read from a JSON inventory at a URL"}
+	return sdk.Info{Kind: Kind, Version: version, Description: "Live aircraft from ADS-B, from adsb.lol or a local receiver"}
 }
 
 // Configure checks the options and reads the token; nothing is fetched until Run or Discover.
@@ -55,22 +54,22 @@ func (m *Module) Configure(_ context.Context, cfg sdk.Config) error {
 	}
 	token, err := o.Read()
 	if err != nil {
-		return fmt.Errorf("line %d: %w", cfg.Line, err)
+		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.name, m.opts, m.token = cfg.Name, o, token
-	m.client = &http.Client{Timeout: o.Timeout}
+	m.name, m.opts, m.src = cfg.Name, o, newSource(&o, token)
 	m.world, m.series = world{}, map[sdk.SeriesRef]*sdk.Ring{}
 	m.health.Store(&sdk.Health{})
 	return nil
 }
 
-// Run reads the inventory every interval: a snapshot after the first good read, then deltas.
-// A failed read shows in Health and is retried sooner; Run returns only when ctx ends.
+// Run reads the source every interval: a snapshot after the first good read, then deltas.
+// A failed read shows in Health and is retried; Run returns only when ctx ends.
 func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 	m.mu.Lock()
 	m.tracker.Reset()
+	m.fleet = m.newFleet()
 	every := m.opts.Interval
 	m.mu.Unlock()
 	send := sink.Snapshot
@@ -88,7 +87,7 @@ func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 		}
 		m.health.Store(&sdk.Health{Err: err})
 		if err != nil {
-			t.Reset(min(every, retryMax))
+			t.Reset(retryAfter(err, every))
 			continue
 		}
 		if err := send(ctx, cs); err != nil {
@@ -99,58 +98,39 @@ func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 	}
 }
 
-// refresh reads the inventory, records its metrics, and returns what changed since the last
-// send, with an event for each status that changed.
+// retryAfter is how long to wait after a failed read: sooner, unless the source is limiting.
+func retryAfter(err error, every time.Duration) time.Duration {
+	if wait, ok := errLimited(err); ok {
+		return min(max(wait, 2*every), limitMax)
+	}
+	return min(every, retryMax)
+}
+
+func (m *Module) newFleet() *fleet { return newFleet(m.opts.area(), m.opts.Expire, m.opts.MaxAircraft) }
+
+// refresh reads the source into the working set, records its metrics, and returns what
+// changed since the last send.
 func (m *Module) refresh(ctx context.Context) (*sdk.ChangeSet, error) {
-	w, err := m.read(ctx)
+	rs, err := m.src.read(ctx)
 	if err != nil {
 		return nil, err
 	}
 	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var events []sdk.Event
-	for _, ref := range slices.Sorted(maps.Keys(w.ents)) {
-		e := w.ents[ref]
-		if old, ok := m.world.ents[ref]; ok && old.Status.Level != e.Status.Level {
-			events = append(events, statusEvent(&old, &e, now))
-		}
+	m.fleet.update(rs, now)
+	w, err := buildWorld(m.scene(m.fleet))
+	if err != nil {
+		return nil, err
 	}
 	m.world = w
 	m.record(&w, now)
-	cs := m.tracker.Changes(w.ents, w.edges, now)
-	cs.Events = events
-	return cs, nil
+	return m.tracker.Changes(w.ents, w.edges, now), nil
 }
 
-func statusEvent(old, e *sdk.Entity, at time.Time) sdk.Event {
-	sev := sdk.SevInfo
-	switch e.Status.Level {
-	case sdk.StatusWarn:
-		sev = sdk.SevWarn
-	case sdk.StatusCrit, sdk.StatusDown:
-		sev = sdk.SevError
-	}
-	return sdk.Event{
-		ID:       string(e.Ref) + "@" + strconv.FormatInt(at.UnixNano(), 10),
-		Entity:   e.Ref,
-		At:       at,
-		Severity: sev,
-		Kind:     "status",
-		Message:  fmt.Sprintf("%s is now %s, was %s", e.Name, e.Status.Level, old.Status.Level),
-		Source:   e.Source,
-	}
-}
-
-func (m *Module) read(ctx context.Context) (world, error) {
-	m.mu.Lock()
-	c, url, token, name := m.client, m.opts.URL, m.token, m.name
-	m.mu.Unlock()
-	items, err := fetch(ctx, c, url, token)
-	if err != nil {
-		return world{}, err
-	}
-	return buildWorld(name, items)
+// scene is what to build a world from the fleet. Callers hold m.mu.
+func (m *Module) scene(f *fleet) *scene {
+	return &scene{src: m.name, source: m.opts.Source, area: m.opts.area(), operators: m.opts.Operators, aircraft: f.aircraft()}
 }
 
 // Health reports whether the last read worked.
@@ -161,12 +141,24 @@ func (m *Module) Health() sdk.Health {
 	return sdk.Health{}
 }
 
-// Discover reads the inventory now and returns all of it.
+// Discover reads the source now and returns what it holds, apart from Run's working set.
 func (m *Module) Discover(ctx context.Context) (*sdk.ChangeSet, error) {
-	w, err := m.read(ctx)
+	m.mu.Lock()
+	src, f := m.src, m.newFleet()
+	m.mu.Unlock()
+	rs, err := src.read(ctx)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	f.update(rs, now)
+	m.mu.Lock()
+	s := m.scene(f)
+	m.mu.Unlock()
+	w, err := buildWorld(s)
 	if err != nil {
 		return nil, err
 	}
 	var fresh sdk.Tracker
-	return fresh.Changes(w.ents, w.edges, time.Now()), nil
+	return fresh.Changes(w.ents, w.edges, now), nil
 }

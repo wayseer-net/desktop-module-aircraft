@@ -1,0 +1,9 @@
+air/aircraft%2Faircraft/406f2c "BAW7XY" 51.470,-0.460 crit "squawking 7700: emergency" altitude_ft=0 callsign=BAW7XY category=A5 emergency=general hex=406f2c on_ground=true registration=G-XAAB speed_kt=4 squawk=7700 track_deg=270 type=B789
+air/aircraft%2Faircraft/43c001 "N123AB" - ok "" altitude_ft=35000 callsign=N123AB hex=43c001 on_ground=false
+air/aircraft%2Faircraft/4ca9f1 "EIN12A" 51.512,-0.301 ok "" altitude_ft=12000 callsign=EIN12A category=A3 hex=4ca9f1 on_ground=false registration=EI-XAA speed_kt=310.5 squawk=4521 track_deg=92.3 type=A320 vertical_rate_fpm=-640
+air/aircraft%2Faircraft/~2a0f00 "2A0F00" 51.600,-0.500 ok "" altitude_ft=3000 hex=~2a0f00 on_ground=false
+air/aircraft%2Farea/area "all the receiver hears" - ok "" aircraft=4 source=receiver
+air/aircraft%2Foperator/BAW "BAW" - ok "" icao=BAW
+air/aircraft%2Foperator/EIN "EIN" - ok "" icao=EIN
+air/aircraft%2Faircraft/406f2c member_of air/aircraft%2Foperator/BAW
+air/aircraft%2Faircraft/4ca9f1 member_of air/aircraft%2Foperator/EIN

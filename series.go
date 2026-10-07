@@ -9,14 +9,20 @@ import (
 	"wayseer.dev/sdk"
 )
 
-// historyPoints is how many reads each series keeps: an hour at the default interval.
-const historyPoints = 240
+// historyPoints is how many reads each series keeps: half an hour at adsb.lol's default pace.
+const historyPoints = 180
 
-// catalogue lists the metrics an item may carry; edit it to match your source. Use the app's
-// canonical names where one fits, so lenses show them alongside other modules' metrics.
+// The metrics, in the module's own names: the SDK has no unit for feet or knots.
+const (
+	metricAltitude = "aircraft.altitude"
+	metricSpeed    = "aircraft.speed"
+	metricCount    = "aircraft.count"
+)
+
 var catalogue = []sdk.Metric{
-	{Name: "cpu.utilisation", Unit: sdk.UnitPercent, Description: "share of CPU time spent busy", Native: "metrics.cpu.utilisation"},
-	{Name: "memory.utilisation", Unit: sdk.UnitPercent, Description: "share of memory in use", Native: "metrics.memory.utilisation"},
+	{Name: metricAltitude, Description: "barometric altitude in feet; 0 on the ground", Kinds: []sdk.Kind{KindAircraft}, Native: "alt_baro"},
+	{Name: metricSpeed, Description: "ground speed in knots", Kinds: []sdk.Kind{KindAircraft}, Native: "gs"},
+	{Name: metricCount, Unit: sdk.UnitCount, Description: "aircraft in the area", Kinds: []sdk.Kind{KindArea}, Native: "aircraft in the working set"},
 }
 
 func inCatalogue(name string) (sdk.Metric, bool) {

@@ -1,0 +1,7 @@
+air/aircraft%2Faircraft/3c4b2d "DLH4UV" 51.900,-0.900 ok "" altitude_ft=24000 callsign=DLH4UV category=A3 hex=3c4b2d on_ground=false registration=D-AXAC speed_kt=420 squawk=1000 track_deg=300 type=A21N
+air/aircraft%2Faircraft/4ca9f1 "EIN12A" 51.512,-0.301 ok "" altitude_ft=12000 callsign=EIN12A category=A3 hex=4ca9f1 on_ground=false registration=EI-XAA speed_kt=310.5 squawk=4521 track_deg=92.3 type=A320
+air/aircraft%2Farea/area "40 nm around 51.47, -0.45" 51.470,-0.450 ok "" aircraft=2 data=adsb.lol contributors, ODbL 1.0 source=adsb.lol
+air/aircraft%2Foperator/DLH "DLH" - ok "" icao=DLH
+air/aircraft%2Foperator/EIN "EIN" - ok "" icao=EIN
+air/aircraft%2Faircraft/3c4b2d member_of air/aircraft%2Foperator/DLH
+air/aircraft%2Faircraft/4ca9f1 member_of air/aircraft%2Foperator/EIN
