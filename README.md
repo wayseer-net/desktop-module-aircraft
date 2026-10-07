@@ -1,62 +1,89 @@
-# Wayseer module template
+# Wayseer module: aircraft
 
-A complete module for Wayseer Desktop to start your own from. It reads a JSON inventory from a
-URL, turns each item into an entity, links items that depend on each other, records their
-metrics, and turns status changes into events. It passes the SDK's conformance suite, runs as
-its own program, and signs into a package the app installs.
+Live aircraft from ADS-B in Wayseer Desktop. Each aircraft appears on the Geo lens where it is
+and moves on every read. It carries its callsign, registration, type, altitude, speed, track and
+squawk. An emergency squawk turns it red and shows in Stream.
 
-## Start
+It is an external module, published in the Wayseer marketplace, and is not built into the app.
+It reads one of two sources:
 
-Make your copy with GitHub's "Use this template", or with `gonew`, which also renames the Go
-module:
+| Source | What it is | Terms |
+|---|---|---|
+| `adsb.lol` (default) | The [adsb.lol](https://adsb.lol) API: a community network's live data | Open data under [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/), "available to everyone", no key today |
+| `receiver` | Your own readsb, tar1090 or dump1090-fa receiver's `aircraft.json` | Yours |
 
-```
-go run golang.org/x/tools/cmd/gonew@latest github.com/wayseer-net/desktop-module-template example.com/widget
-```
+OpenSky Network, airplanes.live and ADSB.fi are not offered. Their terms allow only
+non-commercial or personal use, and Wayseer's users include businesses.
 
-Then rename what is still called `inventory`:
+Wayseer is a lens, not a store. The module keeps only aircraft heard within `expire`, and at most
+`max_aircraft` of them. It never asks adsb.lol for the whole world: it needs an area.
 
-1. The package in every `.go` file, and `Kind` in `module.go`.
-2. `cmd/wayseer-inventory`, and `PROGRAM` in the `Makefile` to match.
-3. In `manifest.yaml`: `id`, `name`, `description` and `namespace`. The `id` starts with your
-   developer certificate's namespace. The `namespace` is your certificate's for a package you
-   sign; for the marketplace, it is the one Wayseer allocates to the module.
+## Configuration
 
-Check that the copy works before you change it:
+Install the package with `>modules.install`, then name it in a config:
 
-```
-make check
-```
-
-Wayseer's user guide, under "Writing a module", walks through the files and how to adapt them
-to your source.
-
-| File | Holds |
-|---|---|
-| `doc.go` | What the module reads, for `go doc`. |
-| `options.go` | The options, their defaults and their checks. |
-| `module.go` | `Info`, `Configure`, `Run`, `Health` and `Discover`: the lifecycle. |
-| `inventory.go` | Fetching the source and turning it into entities and edges. |
-| `series.go` | The metric catalogue and `QuerySeries`. |
-| `actions.go` | One example action. |
-| `module_test.go` | The conformance suite against an `httptest` server, and the module's own tests. |
-| `cmd/wayseer-inventory` | The program that serves the module to the app. |
-| `manifest.yaml` | What the module is and may do, for its signed package. |
-
-## Sign a package
-
-You need Wayseer installed, and a developer key and certificate (the guide's "Getting a
-developer certificate"):
-
-```
-export WAYSEER_DEV_KEY=~/.config/wayseer/dev.pem
-export WAYSEER_DEV_CERT=~/.config/wayseer/dev.cert
-make sign
+```yaml
+modules:
+  - kind: external
+    name: sky
+    options:
+      module: wayseer-labs/aircraft
+      options:
+        area: {lat: 51.47, lon: -0.45, radius_nm: 40}   # around Heathrow
 ```
 
-`make sign` builds the program and runs `wayseer dev sign`, which writes the package to
-`dist/`. For another platform, set `GOOS` and `GOARCH`. Raise `version` in `manifest.yaml`
-before signing again; `dev sign` never overwrites a package.
+A local receiver, which needs no area:
+
+```yaml
+      options:
+        source: receiver
+        url: http://adsb-pi.local/tar1090/data/aircraft.json
+```
+
+| Option | Default | Meaning |
+|---|---|---|
+| `source` | `adsb.lol` | `adsb.lol` or `receiver`. |
+| `url` | `https://api.adsb.lol` | The receiver's `aircraft.json`; for adsb.lol, the API's base (a mirror). |
+| `area` | none | `lat`, `lon` and `radius_nm` (up to 250 nm). adsb.lol needs this or `box`. |
+| `box` | none | `south`, `west`, `north` and `east` in degrees, not across the antimeridian, within 250 nm of its centre. adsb.lol is asked for the circle around it, and only aircraft inside the box are kept. |
+| `interval` | `10s` for adsb.lol, `2s` for a receiver | How often the source is read: at least `5s` for adsb.lol, `500ms` for a receiver. |
+| `timeout` | `10s` | The longest wait for one read. |
+| `expire` | `1m` | How long an aircraft stays after it was last heard (10s to 1h). |
+| `max_aircraft` | `1000` | The most aircraft kept; the least recently heard go first. |
+| `operators` | `true` | Shows the airline an airline callsign names (`BAW123` belongs to `BAW`). |
+| `secret_file`, `secret_env`, `secret_keyring` | none | A receiver's bearer token, for one behind an authenticating proxy. adsb.lol takes none. |
+
+A secret in `secret_env` must also be listed in the entry's `env`. A `secret_keyring` on Linux
+also needs `DBUS_SESSION_BUS_ADDRESS` there.
+
+When adsb.lol answers `429 Too Many Requests`, the module waits for its `Retry-After`, or twice
+the interval, and at most five minutes. The error shows in the module's health until a read works.
+
+## What it shows
+
+| Kind | One per | Attributes |
+|---|---|---|
+| `aircraft/aircraft` | aircraft, by its 24-bit address (`hex`) | `callsign`, `registration`, `type`, `category`, `squawk`, `emergency`, `altitude_ft`, `on_ground`, `speed_kt`, `track_deg`, `vertical_rate_fpm` |
+| `aircraft/operator` | airline designator in a callsign | `icao` |
+| `aircraft/area` | instance: where aircraft are sought, placed at its centre | `source`, `aircraft` (the count), `data` (adsb.lol's attribution) |
+
+An aircraft is named by its callsign, else its registration, else its address. Each is a
+`member_of` its operator. Squawk 7500 or 7700, or an ADS-B emergency of `general`, `unlawful` or
+`downed`, makes it critical; squawk 7600 or another emergency makes it a warning. The reason says
+which. An aircraft with no position has no place, so the Geo lens counts it as "without a place".
+
+**Series** (`>grid.show metric=`): `aircraft.altitude` (feet, 0 on the ground) and
+`aircraft.speed` (knots) on each aircraft, and `aircraft.count` on the area. The SDK has no unit
+for feet or knots, so they carry none, and the names and attributes say the unit.
+
+**Events**: `emergency` when one begins (critical or warning) and when it ends (info), and
+`appeared` and `gone` (debug) as aircraft come and go, so a busy area does not flood Stream.
+
+## Data and attribution
+
+Data from adsb.lol is © adsb.lol contributors and is made available under the Open Database
+License 1.0. The area entity's `data` attribute carries this attribution in the app. The test
+fixtures in `testdata` are made up and copy no real flight.
 
 ## Working on it
 
@@ -65,16 +92,23 @@ make check   # what CI runs: tests with the conformance suite, vet and lint for 
 make help    # every target
 ```
 
-The module imports only the SDK (`wayseer.dev/sdk`), the standard library and its own
-dependencies; `TestImportsOnlyTheSDK` keeps it that way. golangci-lint is pinned in
-`tools/go.mod`, and gitleaks runs at a pinned version through `go run`.
+Tests never reach the network. They serve `testdata` from `httptest`, in both feeds' formats. It
+imports only the SDK (`wayseer.dev/sdk`) and the standard library; `TestImportsOnlyTheSDK` keeps
+it that way. `TestMakeSignPackagesTheModule` signs a package with throwaway keys when Wayseer's
+source is in `../../core`, as in the Wayseer workspace, and skips otherwise.
 
-`TestMakeSignPackagesTheModule` signs a package with throwaway keys. It needs Wayseer's own
-source beside this folder, in `../core`, so it skips in your copy; delete it if you like.
+For the marketplace's conformance run, serve `testdata` and use:
 
-To change the module alongside the SDK, use a Go workspace: `go.work` here with
-`use . ../sdk`. `go.work` is ignored by git.
+```yaml
+options: |
+  source: receiver
+  url: http://127.0.0.1:8080/aircraft.json
+failing: |
+  source: receiver
+  url: http://127.0.0.1:1/aircraft.json
+fixture: testdata
+```
 
 ## Licence
 
-MIT No Attribution; see `LICENSE`. Your copy is yours to license as you choose.
+MIT; see `LICENSE`.
