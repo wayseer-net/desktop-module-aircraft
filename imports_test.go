@@ -1,4 +1,4 @@
-package inventory_test
+package aircraft_test
 
 import (
 	"os/exec"

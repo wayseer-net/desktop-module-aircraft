@@ -1,4 +1,4 @@
-package inventory
+package aircraft
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 )
 
 // Kind is the module kind in config.
-const Kind = "inventory"
+const Kind = "aircraft"
 
 const version = "1"
 
