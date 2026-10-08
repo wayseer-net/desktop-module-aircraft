@@ -46,7 +46,7 @@ A local receiver, which needs no area:
 | `url` | `https://api.adsb.lol` | The receiver's `aircraft.json`; for adsb.lol, the API's base (a mirror). |
 | `area` | none | `lat`, `lon` and `radius_nm` (up to 250 nm). adsb.lol needs this or `box`. |
 | `box` | none | `south`, `west`, `north` and `east` in degrees, not across the antimeridian, within 250 nm of its centre. adsb.lol is asked for the circle around it, and only aircraft inside the box are kept. |
-| `interval` | `10s` for adsb.lol, `2s` for a receiver | How often the source is read: at least `5s` for adsb.lol, `500ms` for a receiver. |
+| `interval` | `30s` for adsb.lol, `2s` for a receiver | How often the source is read: at least `5s` for adsb.lol, `500ms` for a receiver. |
 | `timeout` | `10s` | The longest wait for one read. |
 | `expire` | `1m` | How long an aircraft stays after it was last heard (10s to 1h). |
 | `max_aircraft` | `1000` | The most aircraft kept; the least recently heard go first. |
@@ -56,8 +56,11 @@ A local receiver, which needs no area:
 A secret in `secret_env` must also be listed in the entry's `env`. A `secret_keyring` on Linux
 also needs `DBUS_SESSION_BUS_ADDRESS` there.
 
-When adsb.lol answers `429 Too Many Requests`, the module waits for its `Retry-After`, or twice
-the interval, and at most five minutes. The error shows in the module's health until a read works.
+adsb.lol's limits rise and fall with its load. When it answers `429 Too Many Requests`, the module
+waits for its `Retry-After`, or twice the interval, doubling with each limit in a row, and at most
+five minutes. The error shows in the module's health until a read works. Requests name the module
+in their `User-Agent`, and Health declares the interval as the module's pace, so Wayseer doesn't
+call its data stale between reads.
 
 ## What it shows
 

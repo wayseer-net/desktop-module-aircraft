@@ -21,7 +21,7 @@ const adsbLolURL = "https://api.adsb.lol"
 // The fastest each source is read: adsb.lol limits by load, so it is asked gently.
 var minInterval = map[string]time.Duration{sourceADSBLol: 5 * time.Second, sourceReceiver: 500 * time.Millisecond}
 
-var defaultInterval = map[string]time.Duration{sourceADSBLol: 10 * time.Second, sourceReceiver: 2 * time.Second}
+var defaultInterval = map[string]time.Duration{sourceADSBLol: 30 * time.Second, sourceReceiver: 2 * time.Second}
 
 type options struct {
 	Source            string           `yaml:"source"`       // adsb.lol or receiver

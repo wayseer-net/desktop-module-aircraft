@@ -99,6 +99,9 @@ func decode(rd io.Reader) ([]report, error) {
 	return rs, nil
 }
 
+// userAgent names the module to the source, so its operators can reach whoever runs it.
+const userAgent = "wayseer-aircraft (+https://github.com/wayseer-net/desktop-module-aircraft)"
+
 // source reads one feed over HTTP.
 type source struct {
 	client *http.Client
@@ -140,6 +143,7 @@ func (s *source) get(ctx context.Context) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
 	if t := s.token.Reveal(); t != "" {
 		req.Header.Set("Authorization", "Bearer "+t)
 	}

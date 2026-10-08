@@ -23,7 +23,7 @@ func TestDefaultsFollowTheSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Source != sourceADSBLol || o.URL != adsbLolURL || o.Interval != 10*time.Second || !o.Operators {
+	if o.Source != sourceADSBLol || o.URL != adsbLolURL || o.Interval != 30*time.Second || !o.Operators {
 		t.Errorf("adsb.lol defaults: %+v", o)
 	}
 	o, err = parse(t, "source: receiver\nurl: http://receiver.test/data/aircraft.json")

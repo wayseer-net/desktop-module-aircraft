@@ -103,6 +103,22 @@ func TestARateLimitSaysHowLongToWait(t *testing.T) {
 	}
 }
 
+func TestTheModuleNamesItselfToTheSource(t *testing.T) {
+	var ua string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ua = r.Header.Get("User-Agent")
+		_, _ = w.Write([]byte(`{"ac": []}`))
+	}))
+	defer srv.Close()
+	o, _ := parse(t, "url: "+srv.URL+"\n"+london)
+	if _, err := newSource(&o, sdk.Secret{}).read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(ua, "desktop-module-aircraft") {
+		t.Errorf("User-Agent %q doesn't name the module", ua)
+	}
+}
+
 func TestTheReceiverTokenIsSentButNeverShown(t *testing.T) {
 	var auth string
 	body := `{"aircraft": []}`

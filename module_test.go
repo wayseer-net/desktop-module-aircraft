@@ -196,20 +196,32 @@ func aircraftRef(t *testing.T, hex string) sdk.EntityRef {
 	return ref
 }
 
-func TestARateLimitIsWaitedOut(t *testing.T) {
-	every := 10 * time.Second
+func TestARateLimitIsWaitedOutLongerEachTimeInARow(t *testing.T) {
+	every := 30 * time.Second
 	for _, c := range []struct {
-		err  error
-		want time.Duration
+		err    error
+		inARow int
+		want   time.Duration
 	}{
-		{fmt.Errorf("refused"), every},
-		{&limitedError{wait: 0}, 2 * every},
-		{&limitedError{wait: time.Minute}, time.Minute},
-		{&limitedError{wait: time.Hour}, limitMax},
+		{fmt.Errorf("refused"), 1, retryMax},
+		{&limitedError{wait: 0}, 1, 2 * every},
+		{&limitedError{wait: 0}, 2, 4 * every},
+		{&limitedError{wait: 0}, 3, 8 * every},
+		{&limitedError{wait: 0}, 40, limitMax},
+		{&limitedError{wait: 3 * time.Minute}, 1, 3 * time.Minute},
+		{&limitedError{wait: time.Hour}, 1, limitMax},
 	} {
-		if got := retryAfter(c.err, every); got != c.want {
-			t.Errorf("%v: waits %v, want %v", c.err, got, c.want)
+		if got := retryAfter(c.err, every, c.inARow); got != c.want {
+			t.Errorf("%v, %d in a row: waits %v, want %v", c.err, c.inARow, got, c.want)
 		}
+	}
+}
+
+func TestHealthDeclaresTheIntervalAsItsPace(t *testing.T) {
+	_, srv := serve(t, "testdata/aircraft.json")
+	m := configured(t, receiver(srv, "interval: 45s"))
+	if got := m.Health().Pace; got != 45*time.Second {
+		t.Errorf("pace %v, want the interval", got)
 	}
 }
 

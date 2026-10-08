@@ -60,7 +60,7 @@ func (m *Module) Configure(_ context.Context, cfg sdk.Config) error {
 	defer m.mu.Unlock()
 	m.name, m.opts, m.src = cfg.Name, o, newSource(&o, token)
 	m.world, m.series = world{}, map[sdk.SeriesRef]*sdk.Ring{}
-	m.health.Store(&sdk.Health{})
+	m.health.Store(&sdk.Health{Pace: o.Interval})
 	return nil
 }
 
@@ -75,6 +75,7 @@ func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 	send := sink.Snapshot
 	t := time.NewTimer(0)
 	defer t.Stop()
+	limited := 0 // rate limits in a row
 	for {
 		select {
 		case <-ctx.Done():
@@ -85,11 +86,15 @@ func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		m.health.Store(&sdk.Health{Err: err})
+		m.health.Store(&sdk.Health{Err: err, Pace: every})
+		if _, ok := errLimited(err); ok {
+			limited++
+		}
 		if err != nil {
-			t.Reset(retryAfter(err, every))
+			t.Reset(retryAfter(err, every, limited))
 			continue
 		}
+		limited = 0
 		if err := send(ctx, cs); err != nil {
 			return err
 		}
@@ -98,10 +103,12 @@ func (m *Module) Run(ctx context.Context, sink sdk.Sink) error {
 	}
 }
 
-// retryAfter is how long to wait after a failed read: sooner, unless the source is limiting.
-func retryAfter(err error, every time.Duration) time.Duration {
+// retryAfter is how long to wait after a failed read: sooner, unless the source is limiting,
+// when the wait doubles with each limit in a row.
+func retryAfter(err error, every time.Duration, inARow int) time.Duration {
 	if wait, ok := errLimited(err); ok {
-		return min(max(wait, 2*every), limitMax)
+		backoff := every << min(inARow, 10) // ten doublings pass limitMax from any allowed interval
+		return min(max(wait, backoff), limitMax)
 	}
 	return min(every, retryMax)
 }

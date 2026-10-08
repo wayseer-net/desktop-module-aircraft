@@ -3,7 +3,7 @@ id: wayseer-labs/aircraft
 name: Aircraft
 description: Live aircraft from ADS-B, read from adsb.lol or a local readsb or dump1090 receiver.
 homepage: https://github.com/wayseer-net/desktop-module-aircraft
-version: 0.1.0               # raise it for each version published
+version: 0.1.1               # raise it for each version published
 contract: 1
 namespace: aircraft          # allocated by Wayseer for the marketplace
 kinds:
